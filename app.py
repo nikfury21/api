@@ -12,13 +12,13 @@ async def download(url: str = Query(..., description="YouTube video URL")):
     if not url:
         return JSONResponse(content={"error": "Missing url"}, status_code=400)
 
-    # temporary file (without extension)
     tmp_base = tempfile.NamedTemporaryFile(delete=False).name
     mp3_path = tmp_base + ".mp3"
 
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": tmp_base,   # base path (yt-dlp will add .mp3)
+        "outtmpl": tmp_base + ".%(ext)s",   # ensures yt-dlp writes correct extension
+
         "quiet": True,
         "noplaylist": True,
         "nocheckcertificate": True,
