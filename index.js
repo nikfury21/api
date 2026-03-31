@@ -96,8 +96,5 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-```
 
-Push this, let Render deploy, then try:
-```
 https://api-2-o9d1.onrender.com/download?q=perfect
