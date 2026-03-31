@@ -24,7 +24,6 @@ app.get("/download", async (req, res) => {
   try {
     const youtube = await getYT();
 
-    // Search with default WEB client
     const search = await youtube.search(query, { type: "video" });
     const top = search.videos[0];
     if (!top) return res.status(404).json({ error: "No results found" });
@@ -33,35 +32,40 @@ app.get("/download", async (req, res) => {
     const title = top.title?.text || "audio";
     console.log(`Downloading: "${title}" (${videoId})`);
 
-    // Get info using iOS client - bypasses signature deciphering on server
-    const info = await youtube.getBasicInfo(videoId, "IOS");
-
-    const formats = info.streaming_data?.adaptive_formats || [];
-    const audioFormat = formats
-      .filter(f => f.has_audio && !f.has_video)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    // Try multiple clients until one returns formats
+    let audioFormat = null;
+    for (const client of ["ANDROID", "ANDROID_VR", "IOS", "WEB"]) {
+      try {
+        const info = await youtube.getBasicInfo(videoId, client);
+        const formats = info.streaming_data?.adaptive_formats || [];
+        const found = formats
+          .filter(f => f.has_audio && !f.has_video)
+          .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+        if (found?.url) {
+          audioFormat = found;
+          console.log(`Got stream via ${client} client`);
+          break;
+        }
+      } catch (e) {
+        console.log(`${client} failed: ${e.message}`);
+      }
+    }
 
     if (!audioFormat?.url) {
-      console.error("Available formats:", formats.length);
-      return res.status(500).json({ error: "No audio stream URL found" });
+      return res.status(500).json({ error: "All clients blocked. YouTube is rate limiting this server IP." });
     }
 
     const safeTitle = title.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
     res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     res.setHeader("Content-Type", "audio/mpeg");
 
-    const audioRes = await fetch(audioFormat.url, {
-      headers: {
-        "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
-      }
-    });
-
+    const audioRes = await fetch(audioFormat.url);
     if (!audioRes.ok) throw new Error(`Fetch failed: ${audioRes.status}`);
 
     const nodeStream = Readable.fromWeb(audioRes.body);
 
     ffmpeg(nodeStream)
-      .inputFormat("mp4")
+      .inputFormat("webm")
       .audioCodec("libmp3lame")
       .audioBitrate(192)
       .format("mp3")
