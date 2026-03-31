@@ -12,10 +12,7 @@ const PORT = process.env.PORT || 3000;
 let yt;
 async function getYT() {
   if (!yt) {
-    yt = await Innertube.create({
-      client_type: "TV_EMBEDDED",
-      generate_session_locally: true,
-    });
+    yt = await Innertube.create({ generate_session_locally: true });
   }
   return yt;
 }
@@ -27,6 +24,7 @@ app.get("/download", async (req, res) => {
   try {
     const youtube = await getYT();
 
+    // Search with default WEB client
     const search = await youtube.search(query, { type: "video" });
     const top = search.videos[0];
     if (!top) return res.status(404).json({ error: "No results found" });
@@ -35,7 +33,8 @@ app.get("/download", async (req, res) => {
     const title = top.title?.text || "audio";
     console.log(`Downloading: "${title}" (${videoId})`);
 
-    const info = await youtube.getBasicInfo(videoId, "TV_EMBEDDED");
+    // Get info using iOS client - bypasses signature deciphering on server
+    const info = await youtube.getBasicInfo(videoId, "IOS");
 
     const formats = info.streaming_data?.adaptive_formats || [];
     const audioFormat = formats
@@ -43,6 +42,7 @@ app.get("/download", async (req, res) => {
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
 
     if (!audioFormat?.url) {
+      console.error("Available formats:", formats.length);
       return res.status(500).json({ error: "No audio stream URL found" });
     }
 
@@ -50,13 +50,18 @@ app.get("/download", async (req, res) => {
     res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     res.setHeader("Content-Type", "audio/mpeg");
 
-    const audioRes = await fetch(audioFormat.url);
+    const audioRes = await fetch(audioFormat.url, {
+      headers: {
+        "User-Agent": "com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)",
+      }
+    });
+
     if (!audioRes.ok) throw new Error(`Fetch failed: ${audioRes.status}`);
 
     const nodeStream = Readable.fromWeb(audioRes.body);
 
     ffmpeg(nodeStream)
-      .inputFormat("webm")
+      .inputFormat("mp4")
       .audioCodec("libmp3lame")
       .audioBitrate(192)
       .format("mp3")
@@ -96,4 +101,3 @@ app.get("/", (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
