@@ -3,16 +3,25 @@ import { Innertube } from "youtubei.js";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegPath from "ffmpeg-static";
 import { Readable } from "stream";
+import { ProxyAgent } from "undici";
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Your Webshare proxy - set these as Render environment variables
+const PROXY_URL = process.env.PROXY_URL; // e.g. http://user:pass@proxy.webshare.io:80
+
 let yt;
 async function getYT() {
   if (!yt) {
-    yt = await Innertube.create({ generate_session_locally: true });
+    const options = { generate_session_locally: true };
+    if (PROXY_URL) {
+      options.fetch = (url, init) =>
+        fetch(url, { ...init, dispatcher: new ProxyAgent(PROXY_URL) });
+    }
+    yt = await Innertube.create(options);
   }
   return yt;
 }
@@ -32,9 +41,8 @@ app.get("/download", async (req, res) => {
     const title = top.title?.text || "audio";
     console.log(`Downloading: "${title}" (${videoId})`);
 
-    // Try multiple clients until one returns formats
     let audioFormat = null;
-    for (const client of ["ANDROID", "ANDROID_VR", "IOS", "WEB"]) {
+    for (const client of ["IOS", "ANDROID", "WEB"]) {
       try {
         const info = await youtube.getBasicInfo(videoId, client);
         const formats = info.streaming_data?.adaptive_formats || [];
@@ -43,7 +51,7 @@ app.get("/download", async (req, res) => {
           .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
         if (found?.url) {
           audioFormat = found;
-          console.log(`Got stream via ${client} client`);
+          console.log(`Got stream via ${client}`);
           break;
         }
       } catch (e) {
@@ -52,14 +60,15 @@ app.get("/download", async (req, res) => {
     }
 
     if (!audioFormat?.url) {
-      return res.status(500).json({ error: "All clients blocked. YouTube is rate limiting this server IP." });
+      return res.status(500).json({ error: "No stream found" });
     }
 
     const safeTitle = title.replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "_");
     res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.mp3"`);
     res.setHeader("Content-Type", "audio/mpeg");
 
-    const audioRes = await fetch(audioFormat.url);
+    const dispatcher = PROXY_URL ? new ProxyAgent(PROXY_URL) : undefined;
+    const audioRes = await fetch(audioFormat.url, { dispatcher });
     if (!audioRes.ok) throw new Error(`Fetch failed: ${audioRes.status}`);
 
     const nodeStream = Readable.fromWeb(audioRes.body);
@@ -100,8 +109,6 @@ app.get("/search", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => {
-  res.json({ status: "ok", usage: "/download?q=song+name" });
-});
+app.get("/", (req, res) => res.json({ status: "ok", usage: "/download?q=song+name" }));
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
